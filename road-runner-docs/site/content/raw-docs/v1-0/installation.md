@@ -7,6 +7,10 @@ weight: 1
 
 ## FTC
 
+{{< hint info >}}
+Road Runner does not natively support localizations like the SparkFun Optical Tracking Odometry Sensor or the GoBILDA Pinpoint Odometry Computer. You must rely on community supported forks to use these localization solutions like [this fork by J5155](https://github.com/jdhs-ftc/sparkfun-otos-quickstart).
+{{< /hint >}}
+
 ### Quickstart
 
 The easiest way to get started is the quickstart. The quickstart
