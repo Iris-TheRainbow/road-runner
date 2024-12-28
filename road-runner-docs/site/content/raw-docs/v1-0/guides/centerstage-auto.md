@@ -1,11 +1,11 @@
 ---
-title: Building a CENTERSTAGE Autonomous
+title: Building an Autonomous
 ---
 
-# Building a CENTERSTAGE Autonomous
+# Building an Autonomous
 
 {{< hint info >}}
-This is a community guide written by FTC Team 6051. Thanks for contributing to the docs!
+This is a community guide originally written by FTC Team 6051 and updated by FTC Team 27971. Thanks for contributing to the docs!
 {{< /hint >}}
 
 After tuning, you will be ready to build your first auto routine with Roadrunner
@@ -30,32 +30,33 @@ package org.firstinspires.ftc.teamcode;
 
 import androidx.annotation.NonNull;
 
-// RR-specific imports
+//RR Specific Imports
 import com.acmerobotics.dashboard.config.Config;
 import com.acmerobotics.dashboard.telemetry.TelemetryPacket;
 import com.acmerobotics.roadrunner.Action;
+import com.acmerobotics.roadrunner.ParallelAction;
 import com.acmerobotics.roadrunner.Pose2d;
-import com.acmerobotics.roadrunner.SequentialAction;
+import com.acmerobotics.roadrunner.TrajectoryActionBuilder;
 import com.acmerobotics.roadrunner.Vector2d;
 import com.acmerobotics.roadrunner.ftc.Actions;
+import org.firstinspires.ftc.teamcode.MecanumDrive;
+import com.acmerobotics.roadrunner.SleepAction;
 
-// Non-RR imports
+
+//Non RR imports
 import com.qualcomm.robotcore.eventloop.opmode.Autonomous;
 import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
+import com.qualcomm.robotcore.hardware.DcMotor;
+import com.qualcomm.robotcore.hardware.DcMotorEx;
+import com.qualcomm.robotcore.hardware.DcMotorSimple;
 import com.qualcomm.robotcore.hardware.HardwareMap;
 import com.qualcomm.robotcore.hardware.Servo;
-import com.qualcomm.robotcore.hardware.DcMotorEx;
-import org.firstinspires.ftc.teamcode.MecanumDrive;
+
 ```
 
-<!-- For teams not using encoders on
-mechanisms, `DcMotor` should replace `DcMotorEx`.  -->
-
 Of course, you may need additional imports depending on your robot hardware, or
-you may not need all of the ones included here. Most notably, `import
-com.acmerobotics.roadrunner.ParallelAction;` can be added to enable parallel
-actions. Parallel actions are not used here, but are instantiated in essentially
-the same way as sequential actions.
+you may not need all of the ones included here. In nearly all cases, Android Studio
+will handle these imports for you.
 
 ## Step Two: Define Auto Setup
 
@@ -63,7 +64,7 @@ As with all FTC autonomous modes, it is necessary to define the file as an
 autonomous routine like so:
 ```java
 @Config
-@Autonomous(name = "BLUE_TEST_AUTO_PIXEL", group = "Autonomous")
+@Autonomous(name = "BlueSideTestAuto", group = "Autonomous")
 public class BlueSideTestAuto extends LinearOpMode {}
 ```
 <!-- TODO: link to external docs -- maybe official FTC ones / book -->
@@ -77,17 +78,28 @@ the hardware involved in the mechanism. This hardware will form the basis for
 methods that return *actions*, which we will put together to make an autonomous
 routine.
 
-The following classes instantiate a `DcMotor`-driven, encoder-controlled, linear
+The following classes instantiate a `DcMotorEx`-driven, encoder-controlled, linear
 lift system and a simple servo claw.
 ```java
 // lift class
 public class Lift {
-    private DcMotorEx lift;
+    //The Motor for the lift
+    private DcMotorEx liftMotor;
+    //this will be explained later
+    private int liftTarget;
+    private int liftPose;
+    private double lastTime;
+    private double kP = .003, kD = .0003;
 
     public Lift(HardwareMap hardwareMap) {
-        lift = hardwareMap.get(DcMotorEx.class, "liftMotor");
-        lift.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
-        lift.setDirection(DcMotorSimple.Direction.FORWARD);
+        //make sure to put the name from your config
+        liftMotor = hardwareMap.get(DcMotorEx.class, "liftMotor");
+        liftMotor.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
+        liftMotor.setDirection(DcMotorSimple.Direction.FORWARD);
+        //this will be explained later
+        liftTarget = liftMotor.getCurrentPosition();
+        liftPose = liftTarget;
+        lastTime = System.nanoTime() * 1e-9;
     }
 }
 
@@ -109,73 +121,50 @@ For each new mechanism class, we are going to add *actions*. This is where the
 process becomes RR-specific, so if this is your first time designing a
 1.0.X RR autonomous, **read carefully.**
 
-Starting with the lift, we are going to create a `LiftUp` class that moves the
-lift based on encoder position.
+Starting with the lift, you will need to implement a position control algorithm called 
+a PID controller. The theory of these is covered elsewhere, like [CTRL ALT FTC](https://www.ctrlaltftc.com/).
+
+First, you will need to create an action that will never end and will be run parallel
+to the whole autonomus. This function will be the update method used in a PID.
 
 ```java
-public class LiftUp implements Action {
-    // checks if the lift motor has been powered on
-    private boolean initialized = false;
-
-    // actions are formatted via telemetry packets as below
+public class LiftUpdate implements Action {
     @Override
+    //This method is run repeatedly
     public boolean run(@NonNull TelemetryPacket packet) {
-        // powers on motor, if it is not on
-        if (!initialized) {
-            lift.setPower(0.8);
-            initialized = true;
-        }
+        //This is done for the D term of te PID
+        int lastPose = liftPose;
 
-        // checks lift's current position
-        double pos = lift.getCurrentPosition();
-        packet.put("liftPos", pos);
-        if (pos < 3000.0) {
-            // true causes the action to rerun
-            return true;
-        } else {
-            // false stops action rerun
-            lift.setPower(0);
-            return false;
-        }
-        // overall, the action powers the lift until it surpasses
-        // 3000 encoder ticks, then powers it off
-    }
-}
-```
+        //Done for convience. 
+        liftPose = liftMotor.getCurrentPosition();
 
-We can now create a method that instantiates a `LiftUp` action for convenience.
-```java
-public Action liftUp() {
-    return new LiftUp();
-}
-```
-Now, let's do the same for the `LiftDown`, `OpenClaw`, and `CloseClaw` actions.
-```java
-// within the Lift class
-public class LiftDown implements Action {
-    private boolean initialized = false;
+        //This is used for the P term of the PID
+        int error = liftTarget - liftPose;
+        //Done for the D term, this is velocity in.. ticks per nanosecond. It makes sense in this case, though the unit is odd.
+        double velocity = (liftPose - lastPose) / (System.nanoTime() - lastTime);
+        //This is the entiretly of the PID algoirthm. 
+        double power = kP * error + kD * velocity;
 
-    @Override
-    public boolean run(@NonNull TelemetryPacket packet) {
-        if (!initialized) {
-            lift.setPower(-0.8);
-            initialized = true;
-        }
+        liftMotor.setPower(power);
 
-        double pos = lift.getCurrentPosition();
-        packet.put("liftPos", pos);
-        if (pos > 100.0) {
-            return true;
-        } else {
-            lift.setPower(0);
-            return false;
-        }
+        //This is done for the D term of te PID
+        lastTime = System.nanoTime();
+
+        //returns false to never end
+        return false;
     }
 }
 
-public Action liftDown() {
-    return new LiftDown();
+```
+
+We can now create a method that instantiates a `LiftUpdate` action for convenience.
+```java
+public Action liftUpdate(){
+    return new LiftUpdate();
 }
+```
+Now, you can do the same thing to create `OpenClaw`, and `CloseClaw` actions.
+```java
 
 // within the Claw class
 public class CloseClaw implements Action {
@@ -226,14 +215,14 @@ movements will be thrown off.
 {{< /hint >}}
 
 ## Step Six: Placehold for Vision
-You will likely create your own vision pipeline to find the custom element your
-team has created. Since vision is out of the scope of this tutorial, we are
-going to set a vision output like so:
+In some years, you may need to create your own vision pipeline to find the 
+custom element your team has created. Since vision is out of the scope of
+this tutorial, we are going to set a vision output like so:
 ```java
 // vision here that outputs position
 int visionOutputPosition = 1;
 ```
-Assuming that you have vision, you will want three trajectories for you to
+Assuming that you have vision, you will want multiple trajectories for you to
 choose from.
 
 ## Step Seven: Actually Building the Actions
@@ -241,16 +230,17 @@ These trajectories only cover the surface-level of what RR has to offer,
 but they do offer valuable insight into trajectory-building structure. Note that
 for `lineToX()` and `lineToY()` methods, since the current heading will be used to
 construct the trajectory line, the heading normally cannot be orthogonal to the
-line direction.
-
-If the heading needs to remain orthogonal, you can use
+line direction. if the heading needs to remain orthogonal, you can use
 `setTangent(Math.toRadians(*angle in degrees*))` to set a tangent line for the
 robot to build a trajectory along.
 
-Without further ado, we define a path for `trajectoryAction1`:
+Please also note that in general, functions like `strafeTo()`, `lineToX()`, and `lineToY()`
+will generally be slower than `splineTo()` and and other spline functions because splines can move as one continuious motion.
+
+Without further ado, we define a path for `action1`:
 ```java
 // actionBuilder builds from the drive steps passed to it
-TrajectoryActionBuilder tab1 = drive.actionBuilder(initialPose)
+Action action1 = drive.actionBuilder(initialPose)
         .lineToYSplineHeading(33, Math.toRadians(0))
         .waitSeconds(2)
         .setTangent(Math.toRadians(90))
@@ -260,11 +250,19 @@ TrajectoryActionBuilder tab1 = drive.actionBuilder(initialPose)
         .strafeTo(new Vector2d(44.5, 30))
         .turn(Math.toRadians(180))
         .lineToX(47.5)
-        .waitSeconds(3);
+        .waitSeconds(3)
+        .stopAndAdd(new SequentialAction(lift.goTo(2000), claw.openClaw(), new SleepAction(.5), lift.goTo(0)))
+        .strafeTo(new Vector2d(48, 12))
+        .build();
 ```
-Similarly, we can instantiate the other three drive actions:
+Above, you see the function `stopAndAdd()`. It is used to stop and run an action mid trajectory.
+in this case, you see it used to stop, and run a `SequentialAction()` that raises the lift, opens the claw,
+waits half a second to let the game element drop, then retract the lift. When this is done, the end of the
+trajectory runs.
+
+Similarly, we can make other drive actions:
 ```java
-TrajectoryActionBuilder tab2 = drive.actionBuilder(initialPose)
+Action action2 = drive.actionBuilder(initialPose)
         .lineToY(37)
         .setTangent(Math.toRadians(0))
         .lineToX(18)
@@ -272,27 +270,23 @@ TrajectoryActionBuilder tab2 = drive.actionBuilder(initialPose)
         .setTangent(Math.toRadians(0))
         .lineToXSplineHeading(46, Math.toRadians(180))
         .waitSeconds(3)
+        .stopAndAdd(new SequentialAction(lift.goTo(2000), claw.openClaw(), new SleepAction(.5), lift.goTo(0)))
+        .strafeTo(new Vector2d(48, 12))
         .build();
-TrajectoryActionBuilder tab3 = drive.actionBuilder(initialPose)
+Action action3 = drive.actionBuilder(initialPose)
         .lineToYSplineHeading(33, Math.toRadians(180))
         .waitSeconds(2)
         .strafeTo(new Vector2d(46, 30))
         .waitSeconds(3)
-        .build();
-Action trajectoryActionCloseOut = tab1.endTrajectory().fresh()
+        .stopAndAdd(new SequentialAction(lift.goTo(2000), claw.openClaw(), new SleepAction(.5), lift.goTo(0)))
         .strafeTo(new Vector2d(48, 12))
         .build();
 ```
+
 While the current set vision result means that trajectory actions 2 and 3 will
 never be run, a dynamic vision result will allow them to be run.
 
-## Step Eight: Other On-Init Actions
-
-{{< hint warning >}}
-If you implement these, your robot will need a "Moves on Initialization"
-sticker.
-{{< /hint >}}
-
+ ## Step Eight: Other On-Init Actions
 All of the above work we did happens during the initialization of the robot. You
 want all of your vision and path building to happen up here, because both of
 those take a lot of time to initialize, and you don't want to lose auto runtime
@@ -331,110 +325,108 @@ Now, we are going to do a simple vision-based trajectory selection as below:
 ```java
 Action trajectoryActionChosen;
 if (startPosition == 1) {
-    trajectoryActionChosen = tab1.build();
+    trajectoryActionChosen = action1;
 } else if (startPosition == 2) {
-    trajectoryActionChosen = tab2.build();
+    trajectoryActionChosen = action2;
 } else {
-    trajectoryActionChosen = tab3.build();
+    trajectoryActionChosen = action3;
 }
 ```
 Once that's handled, we are all ready to run our action sequence!
+
+We run the `lift.update()` function in parallel with the drive action. This means
+that the lift will corrects it's position at all times!
 ```java
 Actions.runBlocking(
-        new SequentialAction(
+        new ParallelAction(
                 trajectoryActionChosen,
-                lift.liftUp(),
-                claw.openClaw(),
-                lift.liftDown(),
-                trajectoryActionCloseOut
+                lift.update()
         )
 );
 ```
 Congratulations! Provided everything is configured correctly, you've just
 written your first autonomous in Roadrunner 1.0.X! From here, it's all
 customizing to your specific use case. With <3, Anya Levin (Team #6051, Quantum
-Mechanics)
+Mechanics) and Iris (Teame#27971, Null Pointer Exception)
 
 ## Final Code
 For anyone interested, here is the sample autonomous all put together!
 
 ```java
-package org.firstinspires.ftc.teamcode.teleops;
+package org.firstinspires.ftc.teamcode.opmodes;
+
 import androidx.annotation.NonNull;
+
 import com.acmerobotics.dashboard.config.Config;
 import com.acmerobotics.dashboard.telemetry.TelemetryPacket;
 import com.acmerobotics.roadrunner.Action;
+import com.acmerobotics.roadrunner.ParallelAction;
 import com.acmerobotics.roadrunner.Pose2d;
 import com.acmerobotics.roadrunner.SequentialAction;
+import com.acmerobotics.roadrunner.TrajectoryActionBuilder;
 import com.acmerobotics.roadrunner.Vector2d;
 import com.acmerobotics.roadrunner.ftc.Actions;
+import com.acmerobotics.roadrunner.SleepAction;
+
+
 import com.qualcomm.robotcore.eventloop.opmode.Autonomous;
 import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
+import com.qualcomm.robotcore.hardware.DcMotor;
 import com.qualcomm.robotcore.hardware.DcMotorEx;
-import org.firstinspires.ftc.teamcode.MecanumDrive;
-
 import com.qualcomm.robotcore.hardware.DcMotorSimple;
 import com.qualcomm.robotcore.hardware.HardwareMap;
 import com.qualcomm.robotcore.hardware.Servo;
 
+import org.firstinspires.ftc.teamcode.MecanumDrive;
+
 @Config
-@Autonomous(name = "BLUE_TEST_AUTO_PIXEL", group = "Autonomous")
+@Autonomous(name = "BLUE_TEST_AUTO", group = "Autonomous")
 public class BlueSideTestAuto extends LinearOpMode {
     public class Lift {
-        private DcMotorEx lift;
+        private DcMotorEx liftMotor;
+        private int liftTarget;
+        private int liftPose;
+        private double lastTime;
+        private double kP = .003, kD = .0003;
 
         public Lift(HardwareMap hardwareMap) {
-            lift = hardwareMap.get(DcMotorEx.class, "liftMotor");
-            lift.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
-            lift.setDirection(DcMotorSimple.Direction.FORWARD);
+            liftMotor = hardwareMap.get(DcMotorEx.class, "liftMotor");
+            liftMotor.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
+            liftMotor.setDirection(DcMotorSimple.Direction.FORWARD);
+            liftTarget = liftMotor.getCurrentPosition();
+            liftPose = liftTarget;
+            lastTime = System.nanoTime() * 1e-9;
         }
 
-        public class LiftUp implements Action {
-            private boolean initialized = false;
-
+        public class LiftUpdate implements Action {
             @Override
             public boolean run(@NonNull TelemetryPacket packet) {
-                if (!initialized) {
-                    lift.setPower(0.8);
-                    initialized = true;
-                }
-
-                double pos = lift.getCurrentPosition();
-                packet.put("liftPos", pos);
-                if (pos < 3000.0) {
-                    return true;
-                } else {
-                    lift.setPower(0);
-                    return false;
-                }
+                int lastPose = liftPose;
+                liftPose = liftMotor.getCurrentPosition();
+                int error = liftTarget - liftPose;
+                double power = kP * error + kD * (liftPose - lastPose) / (System.nanoTime() * 1e-9 - lastTime);
+                liftMotor.setPower(power);
+                lastTime = System.nanoTime();
+                return false;
             }
         }
-        public Action liftUp() {
-            return new LiftUp();
-        }
 
-        public class LiftDown implements Action {
-            private boolean initialized = false;
-
+        public class LiftGoTo implements Action {
+            public LiftGoTo(int target) {
+                liftTarget = target;
+            }
             @Override
             public boolean run(@NonNull TelemetryPacket packet) {
-                if (!initialized) {
-                    lift.setPower(-0.8);
-                    initialized = true;
-                }
-
-                double pos = lift.getCurrentPosition();
-                packet.put("liftPos", pos);
-                if (pos > 100.0) {
-                    return true;
-                } else {
-                    lift.setPower(0);
-                    return false;
-                }
+                return liftPose > liftTarget + 20 && liftPose < liftTarget - 20;
             }
         }
-        public Action liftDown(){
-            return new LiftDown();
+
+        public Action goTo(int target) {
+            return new LiftGoTo(target);
+        }
+
+        public Action update() {
+            return new LiftUpdate();
         }
     }
 
@@ -478,7 +470,7 @@ public class BlueSideTestAuto extends LinearOpMode {
         // vision here that outputs position
         int visionOutputPosition = 1;
 
-        TrajectoryActionBuilder tab1 = drive.actionBuilder(initialPose)
+        Action action1 = drive.actionBuilder(initialPose)
                 .lineToYSplineHeading(33, Math.toRadians(0))
                 .waitSeconds(2)
                 .setTangent(Math.toRadians(90))
@@ -488,23 +480,30 @@ public class BlueSideTestAuto extends LinearOpMode {
                 .strafeTo(new Vector2d(44.5, 30))
                 .turn(Math.toRadians(180))
                 .lineToX(47.5)
-                .waitSeconds(3);
-        TrajectoryActionBuilder tab2 = drive.actionBuilder(initialPose)
+                .waitSeconds(3)
+                .stopAndAdd(new SequentialAction(lift.goTo(2000), claw.openClaw(), new SleepAction(.5), lift.goTo(0)))
+                .strafeTo(new Vector2d(48, 12))
+                .build();
+        Action action2 = drive.actionBuilder(initialPose)
                 .lineToY(37)
                 .setTangent(Math.toRadians(0))
                 .lineToX(18)
                 .waitSeconds(3)
                 .setTangent(Math.toRadians(0))
                 .lineToXSplineHeading(46, Math.toRadians(180))
-                .waitSeconds(3);
-        TrajectoryActionBuilder tab3 = drive.actionBuilder(initialPose)
+                .waitSeconds(3)
+                .stopAndAdd(new SequentialAction(lift.goTo(2000), claw.openClaw(), new SleepAction(.5), lift.goTo(0)))
+                .strafeTo(new Vector2d(48, 12))
+                .build();
+        Action action3 = drive.actionBuilder(initialPose)
                 .lineToYSplineHeading(33, Math.toRadians(180))
                 .waitSeconds(2)
                 .strafeTo(new Vector2d(46, 30))
-                .waitSeconds(3);
-        Action trajectoryActionCloseOut = tab1.endTrajectory().fresh()
+                .waitSeconds(3)
+                .stopAndAdd(new SequentialAction(lift.goTo(2000), claw.openClaw(), new SleepAction(.5), lift.goTo(0)))
                 .strafeTo(new Vector2d(48, 12))
                 .build();
+
 
         // actions that need to happen on init; for instance, a claw tightening.
         Actions.runBlocking(claw.closeClaw());
@@ -525,20 +524,17 @@ public class BlueSideTestAuto extends LinearOpMode {
 
         Action trajectoryActionChosen;
         if (startPosition == 1) {
-            trajectoryActionChosen = tab1.build();
+            trajectoryActionChosen = action1;
         } else if (startPosition == 2) {
-            trajectoryActionChosen = tab2.build();
+            trajectoryActionChosen = action2;
         } else {
-            trajectoryActionChosen = tab3.build();
+            trajectoryActionChosen = action3;
         }
 
         Actions.runBlocking(
-                new SequentialAction(
+                new ParallelAction(
                         trajectoryActionChosen,
-                        lift.liftUp(),
-                        claw.openClaw(),
-                        lift.liftDown(),
-                        trajectoryActionCloseOut
+                        lift.update()
                 )
         );
     }
